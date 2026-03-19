@@ -4,7 +4,7 @@ fastapi
 uvicorn
 qdrant-client
 onnxruntime
-transformers
+tokenizers
 numpy
 slowapi
 huggingface_hub
