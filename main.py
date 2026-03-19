@@ -45,8 +45,7 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
 
 # Load ONNX model and tokenizer
 MODEL_DIR = os.getenv("MODEL_DIR", "/app/model")
-model_name = "sankalpakc/NepaliKD-SentenceTransformers-paraphrase-multilingual-MiniLM-L12-v2"
-session = ort.InferenceSession(os.path.join(MODEL_DIR, "model.onnx"))
+session = ort.InferenceSession(os.path.join(MODEL_DIR, "model_quantized.onnx"))
 tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
 
 
