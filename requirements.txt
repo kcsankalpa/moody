@@ -3,6 +3,7 @@ python-dotenv
 fastapi
 uvicorn
 qdrant-client
-sentence-transformers
-torch
+onnxruntime
+transformers
+numpy
 slowapi
