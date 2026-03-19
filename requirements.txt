@@ -1,8 +1,7 @@
-requests>=2.31.0
 python-dotenv
 fastapi
 uvicorn
-qdrant-client
+httpx
 onnxruntime
 tokenizers
 numpy
