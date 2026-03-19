@@ -7,8 +7,7 @@ from pydantic import BaseModel
 import onnxruntime as ort
 from tokenizers import Tokenizer
 import numpy as np
-from qdrant_client import QdrantClient
-from qdrant_client.http import models
+import httpx
 import os
 import uuid
 from dotenv import load_dotenv
@@ -46,7 +45,10 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
 # Load ONNX model and tokenizer
 MODEL_DIR = os.getenv("MODEL_DIR", "/app/model")
 MAX_LENGTH = 128
-session = ort.InferenceSession(os.path.join(MODEL_DIR, "model_quantized.onnx"))
+sess_options = ort.SessionOptions()
+sess_options.intra_op_num_threads = 1
+sess_options.inter_op_num_threads = 1
+session = ort.InferenceSession(os.path.join(MODEL_DIR, "model_quantized.onnx"), sess_options)
 tokenizer = Tokenizer.from_file(os.path.join(MODEL_DIR, "tokenizer.json"))
 tokenizer.enable_padding(pad_id=0, pad_token="[PAD]", length=MAX_LENGTH)
 tokenizer.enable_truncation(max_length=MAX_LENGTH)
@@ -76,25 +78,23 @@ def encode(text: str) -> list[float]:
     embedding = (sum_embeddings / sum_mask)[0]
     return embedding.tolist()
 
-# Qdrant client
-qdrant_url = os.getenv("QDRANT_URL")
-qdrant_api_key = os.getenv("QDRANT_API_KEY")
+# Qdrant REST client
+QDRANT_URL = os.getenv("QDRANT_URL", "").rstrip("/")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+COLLECTION = "moody_songs"
 
-if qdrant_api_key:
-    client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
-else:
-    client = QdrantClient(url=qdrant_url)
+qdrant_headers = {"Content-Type": "application/json"}
+if QDRANT_API_KEY:
+    qdrant_headers["api-key"] = QDRANT_API_KEY
 
-collection_name = "moody_songs"
+qdrant = httpx.Client(base_url=QDRANT_URL, headers=qdrant_headers, timeout=30)
 
 # Ensure collection exists
-try:
-    client.get_collection(collection_name=collection_name)
-except Exception:
-    client.create_collection(
-        collection_name=collection_name,
-        vectors_config=models.VectorParams(distance=models.Distance.COSINE, size=384),
-    )
+resp = qdrant.get(f"/collections/{COLLECTION}")
+if resp.status_code == 404:
+    qdrant.put(f"/collections/{COLLECTION}", json={
+        "vectors": {"size": 384, "distance": "Cosine"}
+    })
 
 
 class SongIngest(BaseModel):
@@ -114,20 +114,17 @@ async def ingest_song(request: Request, song: SongIngest):
     vector = encode(song.lyrics)
     point_id = str(uuid.uuid4())
 
-    client.upsert(
-        collection_name=collection_name,
-        points=[
-            models.PointStruct(
-                id=point_id,
-                vector=vector,
-                payload={
-                    "title": song.title,
-                    "artist": song.artist,
-                    "lyrics": song.lyrics,
-                },
-            )
-        ],
-    )
+    qdrant.put(f"/collections/{COLLECTION}/points", json={
+        "points": [{
+            "id": point_id,
+            "vector": vector,
+            "payload": {
+                "title": song.title,
+                "artist": song.artist,
+                "lyrics": song.lyrics,
+            },
+        }]
+    })
     return {"status": "success", "id": point_id}
 
 
@@ -136,37 +133,27 @@ async def ingest_song(request: Request, song: SongIngest):
 async def search_songs(request: Request, query: SearchQuery):
     vector = encode(query.mood)
 
-    query_filter = None
+    search_body: dict = {"vector": vector, "limit": 5, "with_payload": True}
     if query.artist:
-        query_filter = models.Filter(
-            must=[
-                models.FieldCondition(
-                    key="artist",
-                    match=models.MatchText(text=query.artist),
-                )
-            ]
-        )
+        search_body["filter"] = {
+            "must": [{"key": "artist", "match": {"text": query.artist}}]
+        }
 
-    search_result = client.query_points(
-        collection_name=collection_name,
-        query=vector,
-        query_filter=query_filter,
-        limit=5,
-    )
+    resp = qdrant.post(f"/collections/{COLLECTION}/points/search", json=search_body)
+    data = resp.json().get("result", [])
 
-    if not search_result.points:
+    if not data:
         return {"results": [], "message": "No songs found"}
 
-    results = []
-    for point in search_result.points:
-        results.append(
-            {
-                "title": point.payload["title"],
-                "artist": point.payload["artist"],
-                "lyrics": point.payload["lyrics"],
-                "score": point.score,
-            }
-        )
+    results = [
+        {
+            "title": point["payload"]["title"],
+            "artist": point["payload"]["artist"],
+            "lyrics": point["payload"]["lyrics"],
+            "score": point["score"],
+        }
+        for point in data
+    ]
 
     return {"results": results}
 
