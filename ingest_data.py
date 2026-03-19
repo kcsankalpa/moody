@@ -258,7 +258,10 @@ def main():
         return
 
     session = requests.Session()
-    session.headers.update({"Content-Type": "application/json"})
+    session.headers.update({
+        "Content-Type": "application/json",
+        "X-API-Key": os.getenv("API_KEY", ""),
+    })
 
     songs_ok = 0
     songs_fail = 0
