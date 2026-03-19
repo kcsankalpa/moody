@@ -4,7 +4,9 @@ from fastapi import FastAPI, HTTPException, Security, Depends, status, Request
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
-from sentence_transformers import SentenceTransformer
+import onnxruntime as ort
+from transformers import AutoTokenizer
+import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 import os
@@ -41,9 +43,34 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
         )
     return api_key
 
-# Load model
+# Load ONNX model and tokenizer
+MODEL_DIR = os.getenv("MODEL_DIR", "/app/model")
 model_name = "sankalpakc/NepaliKD-SentenceTransformers-paraphrase-multilingual-MiniLM-L12-v2"
-model = SentenceTransformer(model_name)
+session = ort.InferenceSession(os.path.join(MODEL_DIR, "model.onnx"))
+tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+
+
+def encode(text: str) -> list[float]:
+    """Encode text to a 384-dim embedding using ONNX model with mean pooling."""
+    encoded = tokenizer(
+        text, padding="max_length", truncation=True, max_length=128, return_tensors="np"
+    )
+    output = session.run(
+        None,
+        {
+            "input_ids": encoded["input_ids"],
+            "attention_mask": encoded["attention_mask"],
+            "token_type_ids": encoded["token_type_ids"],
+        },
+    )[0]
+    # Mean pooling
+    mask = np.broadcast_to(
+        np.expand_dims(encoded["attention_mask"], -1), output.shape
+    )
+    sum_embeddings = np.sum(output * mask, axis=1)
+    sum_mask = np.clip(mask.sum(axis=1), a_min=1e-9, a_max=None)
+    embedding = (sum_embeddings / sum_mask)[0]
+    return embedding.tolist()
 
 # Qdrant client
 qdrant_url = os.getenv("QDRANT_URL")
@@ -80,7 +107,7 @@ class SearchQuery(BaseModel):
 @app.post("/ingest", dependencies=[Depends(verify_api_key)])
 @limiter.limit("30/minute")
 async def ingest_song(request: Request, song: SongIngest):
-    vector = model.encode(song.lyrics).tolist()
+    vector = encode(song.lyrics)
     point_id = str(uuid.uuid4())
 
     client.upsert(
@@ -103,7 +130,7 @@ async def ingest_song(request: Request, song: SongIngest):
 @app.post("/search", dependencies=[Depends(verify_api_key)])
 @limiter.limit("60/minute")
 async def search_songs(request: Request, query: SearchQuery):
-    vector = model.encode(query.mood).tolist()
+    vector = encode(query.mood)
 
     query_filter = None
     if query.artist:
