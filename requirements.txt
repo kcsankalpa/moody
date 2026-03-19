@@ -7,3 +7,4 @@ onnxruntime
 transformers
 numpy
 slowapi
+huggingface_hub
