@@ -5,7 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from pydantic import BaseModel
 import onnxruntime as ort
-from transformers import AutoTokenizer
+from tokenizers import Tokenizer
 import numpy as np
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
@@ -45,26 +45,31 @@ async def verify_api_key(api_key: str = Depends(api_key_header)):
 
 # Load ONNX model and tokenizer
 MODEL_DIR = os.getenv("MODEL_DIR", "/app/model")
+MAX_LENGTH = 128
 session = ort.InferenceSession(os.path.join(MODEL_DIR, "model_quantized.onnx"))
-tokenizer = AutoTokenizer.from_pretrained(MODEL_DIR)
+tokenizer = Tokenizer.from_file(os.path.join(MODEL_DIR, "tokenizer.json"))
+tokenizer.enable_padding(pad_id=0, pad_token="[PAD]", length=MAX_LENGTH)
+tokenizer.enable_truncation(max_length=MAX_LENGTH)
 
 
 def encode(text: str) -> list[float]:
     """Encode text to a 384-dim embedding using ONNX model with mean pooling."""
-    encoded = tokenizer(
-        text, padding="max_length", truncation=True, max_length=128, return_tensors="np"
-    )
+    encoded = tokenizer.encode(text)
+    input_ids = np.array([encoded.ids], dtype=np.int64)
+    attention_mask = np.array([encoded.attention_mask], dtype=np.int64)
+    token_type_ids = np.array([encoded.type_ids], dtype=np.int64)
+
     output = session.run(
         None,
         {
-            "input_ids": encoded["input_ids"],
-            "attention_mask": encoded["attention_mask"],
-            "token_type_ids": encoded["token_type_ids"],
+            "input_ids": input_ids,
+            "attention_mask": attention_mask,
+            "token_type_ids": token_type_ids,
         },
     )[0]
     # Mean pooling
     mask = np.broadcast_to(
-        np.expand_dims(encoded["attention_mask"], -1), output.shape
+        np.expand_dims(attention_mask, -1), output.shape
     )
     sum_embeddings = np.sum(output * mask, axis=1)
     sum_mask = np.clip(mask.sum(axis=1), a_min=1e-9, a_max=None)
