@@ -1,4 +1,4 @@
-Moody is an FastAPI service that is used to ingest Nepali song lyrics and fetch them using an embedding model <br/> <a href="https://huggingface.co/sankalpakc/NepaliKD-MiniLM-L12-v2-onnx"><strong>Link </strong></link> 
+Moody is an FastAPI service that is used to ingest Nepali song lyrics and fetch them using an embedding model <br/> <a href="https://huggingface.co/sankalpakc/NepaliKD-MiniLM-L12-v2-onnx"><strong>Link </strong> </link> 
 and qdrant vector database.
 
 The embedding model is used is:
